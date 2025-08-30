@@ -62,24 +62,59 @@
 
             <!-- Output field (comes from Flask) -->
             {% if output_text %}
-                <div class="alert alert-info mt-3" >
-                    <p>Rank1 Name: {{ output_text.rank1_name }}</p>
-                    <p>Rank1 Price: {{ output_text.rank1_price }}</p>
-                    <p>Rank1 Sustainability Score (/10): {{ output_text.rank1_sustainability_score10 }}</p>
-                    <p>Rank1 Health Score (/10): {{ output_text.rank1_health_score10 }}</p>
-                    <p>Rank1 Comments: {{ output_text.rank1_scoreReasoning }}</p>
-                    <p>Rank2 Name: {{ output_text.rank2_name }}</p>
-                    <p>Rank2 Price: {{ output_text.rank2_price }}</p>
-                    <p>Rank2 Sustainability Score (/10): {{ output_text.rank2_sustainability_score10 }}</p>
-                    <p>Rank2 Health Score (/10): {{ output_text.rank2_health_score10 }}</p>
-                    <p>Rank2 Comments: {{ output_text.rank2_scoreReasoning }}</p>
-                    <p>Rank3 Name: {{ output_text.rank3_name }}</p>
-                    <p>Rank3 Price: {{ output_text.rank3_price }}</p>
-                    <p>Rank3 Sustainability Score (/10): {{ output_text.rank3_sustainability_score10 }}</p>
-                    <p>Rank3 Health Score (/10): {{ output_text.rank3_health_score10 }}</p>
-                    <p>Rank3 Comments: {{ output_text.rank3_scoreReasoning }}</p>
+            <div class="container mt-5">
+                <h2 class="text-center mb-4">Top Matches</h2>
+                <div class="row g-4">
+            
+                    <!-- Product 1 -->
+                    <div class="col-md-4">
+                        <div class="card shadow-sm h-100">
+                            <div class="card-body text-center">
+                                <h5 class="card-title fw-bold">🏆 {{ output_text.rank1_name }}</h5>
+                                <h2 class="text-success fw-bold">{{ output_text.rank1_price }}</h2>
+                                <p class="text-muted small">per unit: {{ output_text.rank1_price_per_unit or "N/A" }}</p>
+                                <hr>
+                                <p><strong>Health:</strong> {{ output_text.rank1_health_score10 }}/10</p>
+                                <p><strong>Sustainability:</strong> {{ output_text.rank1_sustainability_score10 }}/10</p>
+                                <p class="small text-muted">{{ output_text.rank1_scoreReasoning }}</p>
+                            </div>
+                        </div>
+                    </div>
+            
+                    <!-- Product 2 -->
+                    <div class="col-md-4">
+                        <div class="card shadow-sm h-100">
+                            <div class="card-body text-center">
+                                <h5 class="card-title fw-bold">🥈 {{ output_text.rank2_name }}</h5>
+                                <h2 class="text-success fw-bold">{{ output_text.rank2_price }}</h2>
+                                <p class="text-muted small">per unit: {{ output_text.rank2_price_per_unit or "N/A" }}</p>
+                                <hr>
+                                <p><strong>Health:</strong> {{ output_text.rank2_health_score10 }}/10</p>
+                                <p><strong>Sustainability:</strong> {{ output_text.rank2_sustainability_score10 }}/10</p>
+                                <p class="small text-muted">{{ output_text.rank2_scoreReasoning }}</p>
+                            </div>
+                        </div>
+                    </div>
+            
+                    <!-- Product 3 -->
+                    <div class="col-md-4">
+                        <div class="card shadow-sm h-100">
+                            <div class="card-body text-center">
+                                <h5 class="card-title fw-bold">🥉 {{ output_text.rank3_name }}</h5>
+                                <h2 class="text-success fw-bold">{{ output_text.rank3_price }}</h2>
+                                <p class="text-muted small">per unit: {{ output_text.rank3_price_per_unit or "N/A" }}</p>
+                                <hr>
+                                <p><strong>Health:</strong> {{ output_text.rank3_health_score10 }}/10</p>
+                                <p><strong>Sustainability:</strong> {{ output_text.rank3_sustainability_score10 }}/10</p>
+                                <p class="small text-muted">{{ output_text.rank3_scoreReasoning }}</p>
+                            </div>
+                        </div>
+                    </div>
+            
                 </div>
+            </div>
             {% endif %}
+
 
         </div>
     </body>
