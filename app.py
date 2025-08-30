@@ -4,6 +4,9 @@ from flask import Flask, render_template, request, redirect, url_for
 from flask_login import LoginManager, login_required, UserMixin
 from lib.OpenAIInterface import  Top3Product, ProductSummary
 from lib.SQLHandler import db_count_matches, query_top_products
+from flask_login import LoginManager, login_required, UserMixin, login_user
+from lib.User import User
+
 app = Flask(__name__)
 
 # Setup login 
@@ -11,34 +14,61 @@ app.config['SECRET_KEY'] = 'syncs2025'
 
 login_manager = LoginManager()
 login_manager.init_app(app)
-login_manager.login_view = 'login' # Set the login view to the 'login' route
+
+# dummy username and password
+USERNAME = "syncs"
+PASSWORD = "2025"
+
+# Users Dictionary 
+users = {}
 
 saved_text = ""
 
-@app.route('/')
-@login_required
+@login_manager.user_loader
+def user_loader(user_id):
+    return users[user_id]
+
+# Login page
+@app.route("/", methods=["GET", "POST"])
+def login():
+
+    if request.method == 'POST':
+        # Handle login logic here (e.g., validate credentials)
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        if username == USERNAME and password == PASSWORD:  
+            
+            # Login user and redirect page - no user attributes
+            user = User()
+            user.id = username
+            users[user] = user.id
+            
+            login_user(user)
+            return redirect(url_for('index'))  # Redirect to a protected page
+        
+        else:
+
+            message = 'Invalid credentials. Please try again.'
+            return render_template('login.html', message=message)
+    
+    # Render the login page for GET requests
+    return render_template('login.html')
+        
+
+
+
+# Home page   
+@app.route('/home')
+# @login_required
 def index():
     return render_template("index.html", saved_text=saved_text)
 
-
+# User page
 @app.route('/user')
-@login_required
+# @login_required
 def user():
     return render_template("user.html")
-
-
-@app.route('/login', methods=["GET", "POST"])
-def login():
-     if request.method == 'POST':
-        # Handle login logic here (e.g., validate credentials)
-        username = request.form['username']
-        password = request.form['password']
-        
-        if username == 'user' and password == 'pass':  
-            return redirect(url_for('dashboard')) # Redirect to a protected page
-        else:
-            message = 'Invalid credentials. Please try again.'
-            return render_template('login.html', message=message)
 
 
 
