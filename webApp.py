@@ -1,6 +1,7 @@
 #!/bin/python
 
 from flask import Flask, render_template, request
+from OpenAIInterface import callOpenAI
 
 app = Flask(__name__)
 
@@ -21,9 +22,12 @@ def submit_text():
 
     saved_text = f"{user_item}, {user_category}, {user_args}"
     
-    output_text = f"User entered: {saved_text}"  # display to output_text 
+    output_text = callOpenAI(saved_text)
+
 
     return render_template("index.html", saved_text=saved_text, output_text=output_text)
+
+
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=80, debug=True)
