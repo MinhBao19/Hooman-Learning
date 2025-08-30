@@ -15,7 +15,11 @@ def submit_text():
     
     global saved_text
     # get the value from the form (the "name" of the input box)
-    saved_text = request.form.get("user_text")
+    user_item = request.form.get("user_item")
+    user_category = request.form.get("user_category")
+    user_args = request.form.get("user_args")
+
+    saved_text = f"{user_item}, {user_category}, {user_args}"
     
     output_text = f"User entered: {saved_text}"  # display to output_text 
 
