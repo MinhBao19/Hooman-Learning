@@ -59,8 +59,22 @@
 
             <!-- Output field (comes from Flask) -->
             {% if output_text %}
-                <div class="alert alert-info mt-3" role="alert">
-                    {{ output_text }}
+                <div class="alert alert-info mt-3" >
+                    <p>Rank1 Name: {{ output_text.rank1_name }}</p>
+                    <p>Rank1 Price: {{ output_text.rank1_price }}</p>
+                    <p>Rank1 Sustainability Score (/10): {{ output_text.rank1_sustainability_score10 }}</p>
+                    <p>Rank1 Health Score (/10): {{ output_text.rank1_health_score10 }}</p>
+                    <p>Rank1 Comments: {{ output_text.rank1_scoreReasoning }}</p>
+                    <p>Rank2 Name: {{ output_text.rank2_name }}</p>
+                    <p>Rank2 Price: {{ output_text.rank2_price }}</p>
+                    <p>Rank2 Sustainability Score (/10): {{ output_text.rank2_sustainability_score10 }}</p>
+                    <p>Rank2 Health Score (/10): {{ output_text.rank2_health_score10 }}</p>
+                    <p>Rank2 Comments: {{ output_text.rank2_scoreReasoning }}</p>
+                    <p>Rank3 Name: {{ output_text.rank3_name }}</p>
+                    <p>Rank3 Price: {{ output_text.rank3_price }}</p>
+                    <p>Rank3 Sustainability Score (/10): {{ output_text.rank3_sustainability_score10 }}</p>
+                    <p>Rank3 Health Score (/10): {{ output_text.rank3_health_score10 }}</p>
+                    <p>Rank3 Comments: {{ output_text.rank3_scoreReasoning }}</p>
                 </div>
             {% endif %}
 
