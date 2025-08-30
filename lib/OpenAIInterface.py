@@ -1,7 +1,11 @@
-from openai import OpenAI
-from pydantic import BaseModel
+import os
+from pathlib import Path
+from typing import Optional, Dict, Any, List
 
-def callOpenAI(prompt: str) -> str:
+from pydantic import BaseModel
+from openai import OpenAI
+
+def Top3Product(prompt: str) -> str:
     client = OpenAI()
 
     class ProductExtraction(BaseModel):
@@ -37,3 +41,26 @@ def callOpenAI(prompt: str) -> str:
 
     products = response.output_parsed
     return products
+
+
+def ProductSummary(client: OpenAI, row: Dict[str, Any]) -> str:
+    payload = {
+        "name": row.get("description"),
+        "brand_owner": row.get("brand_owner"),
+        "category": row.get("fdc_category"),
+        "supplier_store": row.get("store"),
+        "price_per_unit_aud": row.get("price_per_unit_aud"),
+        "ratings": {
+            "healthiness": row.get("rating_healthiness"),
+            "sustainability": row.get("rating_sustainability"),
+        },
+    }
+    resp = client.responses.parse(
+        model="gpt-4o-2024-08-06",
+        input=[
+            {"role": "system", "content": "Return an informative and objective 20-word summary for Australian shoppers."},
+            {"role": "user", "content": str(payload)},
+        ],
+        text_format=ProductSummary,
+    )
+    return resp.output_parsed.summary_20_words

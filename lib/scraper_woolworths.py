@@ -1,4 +1,10 @@
 # woolworths_scraper.py
+# Requirements:
+#   pip install selenium beautifulsoup4
+# Note:
+#   - Uses configuration.ini (see keys in the CONFIG section below).
+#   - Writes CSV with columns (incl. Ingredients, NutritionJSON).
+#   - Handles Windows CSV locks with retry/fallback.
 
 import sys
 import csv
@@ -10,6 +16,7 @@ import shutil
 import configparser
 import re
 import json
+from datetime import datetime
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -21,7 +28,7 @@ from selenium.common.exceptions import TimeoutException, WebDriverException, Jav
 from bs4 import BeautifulSoup
 
 # ======================
-# Configuration
+# CONFIG
 # ======================
 
 CONFIG_FILE = "configuration.ini"
@@ -61,8 +68,63 @@ IGNORED_ENDPOINTS = [s.strip() for s in IGNORED_CATEGORIES_RAW.split(',') if s.s
 # In-run caches
 _DETAILS_CACHE = {}
 
+# CSV header (kept here so the safe writer can seed headers when creating/rolling files)
+CSV_HEADER = [
+    "Product Code", "Category", "Item Name",
+    "Best Price", "Best Unit Price",
+    "Item Price", "Unit Price",
+    "Price Was", "Special Text", "Complex Promo Text", "Link",
+    "Ingredients", "NutritionJSON"
+]
+
 # ======================
-# Helpers
+# FILE HELPERS (Windows lock-safe)
+# ======================
+
+def ensure_dir_writable(directory: str) -> bool:
+    try:
+        os.makedirs(directory, exist_ok=True)
+        probe = os.path.join(directory, ".write_probe.tmp")
+        with open(probe, "w", encoding="utf-8") as t:
+            t.write("ok")
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
+
+def open_csv_writer_with_retry(base_path: str,
+                               header: list,
+                               max_retries: int = 8,
+                               backoff_start: float = 0.4):
+    """
+    Try to open CSV for append. If PermissionError persists after retries,
+    fall back to a timestamped file (keeps the run going).
+    Returns (file_handle, csv_writer, final_path).
+    """
+    attempt = 0
+    while attempt < max_retries:
+        try:
+            is_new = not os.path.exists(base_path)
+            f = open(base_path, "a", newline="", encoding="utf-8")
+            writer = csv.writer(f)
+            if is_new and header:
+                writer.writerow(header)
+            return f, writer, base_path
+        except PermissionError:
+            time.sleep(backoff_start * (2 ** attempt))
+            attempt += 1
+
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    root, ext = os.path.splitext(base_path)
+    alt_path = f"{root}_{ts}{ext or '.csv'}"
+    f = open(alt_path, "a", newline="", encoding="utf-8")
+    writer = csv.writer(f)
+    writer.writerow(header)
+    print(f"⚠️  Could not open '{base_path}' (locked or not writable). Writing to '{alt_path}' instead.")
+    return f, writer, alt_path
+
+# ======================
+# GENERAL HELPERS
 # ======================
 
 def nap(base: int = DELAY_BASE, lo: float = 0.25, hi: float = 0.75):
@@ -75,20 +137,6 @@ def persist_resume(category: str, page: int, active: bool = True):
     with open(CONFIG_FILE, 'w') as cfgf:
         CFG.write(cfgf)
 
-def save_header_if_new(path: str):
-    if not os.path.exists(SAVE_DIR):
-        os.makedirs(SAVE_DIR, exist_ok=True)
-    if not os.path.exists(path):
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                "Product Code", "Category", "Item Name",
-                "Best Price", "Best Unit Price",
-                "Item Price", "Unit Price",
-                "Price Was", "Special Text", "Complex Promo Text", "Link",
-                "Ingredients", "NutritionJSON"
-            ])
-
 def wait_for(driver, by, selector, timeout=NAV_TIMEOUT):
     return WebDriverWait(driver, timeout).until(EC.presence_of_element_located((by, selector)))
 
@@ -99,67 +147,20 @@ def safe_js(driver, script, default=None):
     except (JavascriptException, WebDriverException):
         return default
 
-def _scroll_page_fully(driver, step=900, pause=0.25, max_loops=40):
-    """Scroll down to trigger lazy-loaded content."""
-    last = 0
-    loops = 0
-    while loops < max_loops:
-        driver.execute_script(f"window.scrollBy(0,{step});")
-        time.sleep(pause)
-        now = driver.execute_script("return Math.round(window.scrollY)")
-        height = driver.execute_script("return document.body.scrollHeight")
-        if now == last or now + 5 >= height:
-            break
-        last = now
-        loops += 1
-    # small bounce at the bottom
-    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-    time.sleep(0.35)
-
-def _expand_nutrition_sections(driver):
-    """Click anything that looks like a Nutrition accordion/tab, then wait a tick."""
-    js = r"""
-    (function(){
-      const rx = /(nutrition\s*information|nutritional|nutrition)\b/i;
-      const els = Array.from(document.querySelectorAll(
-        'button, a, summary, [role="button"], [role="tab"], [aria-controls], [onclick]'
-      ));
-      let clicked = 0;
-      for (const el of els) {
-        const t = (el.innerText || el.textContent || '').trim();
-        if (!t) continue;
-        if (rx.test(t)) {
-          try { el.click(); clicked++; } catch(e){}
-        }
-      }
-      // Some sites use <details><summary>Nutrition…</summary>…</details>
-      for (const det of Array.from(document.querySelectorAll('details'))) {
-        const sum = det.querySelector('summary');
-        if (!sum) continue;
-        const t = (sum.innerText || sum.textContent || '').trim();
-        if (t && rx.test(t)) { try { det.open = true; clicked++; } catch(e){} }
-      }
-      return clicked;
-    })();
-    """
-    try:
-        return driver.execute_script(js) or 0
-    except Exception:
-        return 0
-
-
 # ======================
-# Robust Edge driver
+# ROBUST EDGE DRIVER
 # ======================
 
 def edge_driver(headless_override: bool = None):
     class _Ctx:
         def __enter__(self_inner):
             headless = HEADLESS if headless_override is None else headless_override
+
             def build_driver(hless: bool):
                 opts = EdgeOptions()
                 opts.add_argument("--window-size=1280,900")
                 opts.add_experimental_option('excludeSwitches', ['enable-logging'])
+                # stability flags
                 opts.add_argument("--disable-extensions")
                 opts.add_argument("--no-first-run")
                 opts.add_argument("--no-default-browser-check")
@@ -181,6 +182,7 @@ def edge_driver(headless_override: bool = None):
                 if msedgedriver_path:
                     service = EdgeService(executable_path=msedgedriver_path)
                 return webdriver.Edge(options=opts, service=service) if service else webdriver.Edge(options=opts)
+
             try:
                 self_inner.driver = build_driver(hless=headless)
                 return self_inner.driver
@@ -190,15 +192,17 @@ def edge_driver(headless_override: bool = None):
                     self_inner.driver = build_driver(hless=False)
                     return self_inner.driver
                 raise
+
         def __exit__(self_inner, exc_type, exc, tb):
             try:
                 self_inner.driver.quit()
             except Exception:
                 pass
+
     return _Ctx()
 
 # ======================
-# Category & tile scraping
+# CATEGORY & TILE SCRAPING
 # ======================
 
 def get_categories(driver):
@@ -317,7 +321,7 @@ def normalize_best_price(itemprice: str, unitprice: str, promo: str):
     return best_price, best_unitprice, price_was
 
 # ======================
-# Details (Ingredients + Nutrition)
+# DETAILS (INGREDIENTS + NUTRITION)
 # ======================
 
 ING_HEADING_PATTERN = re.compile(r'^\s*ingredients\s*[:\-]?\s*$', re.IGNORECASE | re.MULTILINE)
@@ -360,48 +364,6 @@ def _raw_details_text_js():
     trySel('product-details');
     if (!text.trim()) text = collectTextFrom(document.body);
     return text;
-    """
-
-def _click_nutrition_tab_js():
-    # Click anything that looks like a Nutrition tab/button, including inside shadow roots.
-    return """
-    function walk(root, out=[]) {
-      if (!root) return out;
-      out.push(root);
-      const kids = root.children || [];
-      for (let i=0;i<kids.length;i++) {
-        const k = kids[i];
-        out.push(k);
-        if (k.shadowRoot) walk(k.shadowRoot, out);
-        walk(k, out);
-      }
-      return out;
-    }
-    function tryClick(el) {
-      try { el.click(); return true; } catch(e) {}
-      try { el.dispatchEvent(new MouseEvent('click', {bubbles:true})); return true; } catch(e) {}
-      return false;
-    }
-    const nodes = walk(document);
-    const rx = /(nutrition|nutritional)/i;
-    let clicked = false;
-    for (const n of nodes) {
-      // prefer tabs or buttons
-      if (n && (n.role === 'tab' || n.getAttribute && (n.getAttribute('role')==='tab' || n.tagName==='BUTTON' || n.tagName==='A' || /tab/i.test(n.className||'')))) {
-        const t = (n.innerText || n.textContent || '').trim();
-        if (rx.test(t)) { clicked = tryClick(n) || clicked; }
-      }
-    }
-    // If still not clicked, try any element with matching innerText
-    if (!clicked) {
-      for (const n of nodes) {
-        const t = (n.innerText || n.textContent || '').trim();
-        if (t && rx.test(t) && (n.offsetParent !== null)) {
-          clicked = tryClick(n) || clicked;
-        }
-      }
-    }
-    return clicked;
     """
 
 def _extract_nutrition_table_js():
@@ -447,7 +409,6 @@ def _extract_nutrition_table_js():
       headers = Array.from(ths).map(th => text(th));
     }
     if (!headers.length) {
-      // try first row as header
       const fr = best.querySelector('tr');
       if (fr) headers = Array.from(fr.querySelectorAll('th,td')).map(td => text(td));
     }
@@ -458,12 +419,11 @@ def _extract_nutrition_table_js():
     if (trs.length) {
       rows = Array.from(trs).map(tr => Array.from(tr.querySelectorAll('td,th')).map(td => text(td)));
     } else {
-      // fallback all rows
       const all = best.querySelectorAll('tr');
       rows = Array.from(all).slice(1).map(tr => Array.from(tr.querySelectorAll('td,th')).map(td => text(td)));
     }
 
-    // Attempt to find serving size near the table
+    // Serving size near table
     let serving = '';
     let parent = best.parentElement;
     for (let i=0;i<5 && parent;i++, parent = parent.parentElement) {
@@ -476,20 +436,85 @@ def _extract_nutrition_table_js():
     """
 
 def _detect_column_order_from_headers(headers):
-    # Try to find nutrient + per serving + per 100g columns
     hdrs = [h.lower() for h in headers]
     idx_nutr = 0
     if any('nutrient' in h or 'average quantity' in h or 'avg qty' in h for h in hdrs):
         idx_nutr = min(range(len(hdrs)), key=lambda i: (0 if 'nutrient' in hdrs[i] else 1))
-    # find per serving and per 100
     idx_serv = next((i for i,h in enumerate(hdrs) if 'per serving' in h or 'serving' in h), -1)
     idx_100 = next((i for i,h in enumerate(hdrs) if 'per 100' in h or '100g' in h or '100 ml' in h), -1)
-    # fallback: if only two numeric columns exist, assume they are serving, 100g
     if idx_serv == -1 or idx_100 == -1:
         numericish = [i for i,h in enumerate(hdrs) if any(k in h for k in ['per 100','100','serv'])]
         if len(numericish) >= 2:
             idx_serv, idx_100 = numericish[0], numericish[1]
     return idx_nutr, idx_serv, idx_100
+
+def _detect_order_from_table_text(table_text: str):
+    low = table_text.lower()
+    ps = low.find("per serving")
+    p100 = low.find("per 100")
+    if ps != -1 and p100 != -1:
+        return ("per_serving", "per_100g") if ps < p100 else ("per_100g", "per_serving")
+    if p100 != -1:
+        return ("per_100g", "per_serving")
+    return ("per_serving", "per_100g")
+
+def parse_nutrition_from_table(table_obj: dict) -> dict:
+    if not table_obj:
+        return {}
+    headers = table_obj.get("headers") or []
+    rows = table_obj.get("rows") or []
+    serving_size = (table_obj.get("serving_size") or "").strip()
+    table_text = table_obj.get("table_text") or ""
+
+    per_serving, per_100g = {}, {}
+    if not rows:
+        return {"serving_size": serving_size} if serving_size else {}
+
+    idx_nutr, idx_serv, idx_100 = _detect_column_order_from_headers(headers) if headers else (0, -1, -1)
+    if idx_serv == -1 and idx_100 == -1:
+        order = _detect_order_from_table_text(table_text)
+        infer_only = True
+    else:
+        order = ("per_serving", "per_100g")
+        infer_only = False
+
+    def put(key, value, which):
+        if not value: return
+        if which == "per_serving": per_serving[key] = value
+        else: per_100g[key] = value
+
+    for r in rows:
+        if not r: continue
+        name = (r[idx_nutr] if idx_nutr < len(r) else r[0]).strip()
+        if not name: continue
+        low = name.lower()
+
+        ckey = None
+        for key, pat in NUTRIENT_KEYS:
+            if re.search(pat, low, re.I):
+                ckey = key
+                break
+        if not ckey:
+            continue
+
+        if infer_only:
+            vals = [f"{n} {u}".replace(" ,", ",") for (n, u) in VAL_PATTERN.findall(" ".join(r))]
+            if len(vals) >= 1:
+                which1, which2 = order
+                put(ckey, vals[0], which1)
+                if len(vals) >= 2:
+                    put(ckey, vals[1], which2)
+        else:
+            v_serv = r[idx_serv].strip() if 0 <= idx_serv < len(r) else ""
+            v_100 = r[idx_100].strip() if 0 <= idx_100 < len(r) else ""
+            put(ckey, v_serv, "per_serving")
+            put(ckey, v_100, "per_100g")
+
+    out = {}
+    if serving_size: out["serving_size"] = serving_size
+    if per_serving:  out["per_serving"] = per_serving
+    if per_100g:    out["per_100g"] = per_100g
+    return out
 
 def _slice_section(text: str, heading_regex: re.Pattern) -> str:
     if not text:
@@ -521,8 +546,7 @@ def _slice_section(text: str, heading_regex: re.Pattern) -> str:
     cut_at_chars = None
     for i, line in enumerate(lines[:120]):
         s = line.strip()
-        if not s:
-            continue
+        if not s: continue
         if (len(s) <= 60 and (s.istitle() or s.isupper())
             and not s.endswith(':') and not s.lower().startswith(("•","- "))):
             if i > 0:
@@ -537,96 +561,15 @@ def _slice_section(text: str, heading_regex: re.Pattern) -> str:
 
 def parse_ingredients_from_text(text: str) -> str:
     sect = _slice_section(text, ING_HEADING_PATTERN)
-    if not sect:
-        return ""
+    if not sect: return ""
     return re.sub(r'[ \t]+', ' ', sect).strip()
 
-def _detect_order_from_table_text(table_text: str):
-    low = table_text.lower()
-    # guess column order by mention order
-    ps = low.find("per serving")
-    p100 = low.find("per 100")
-    if ps != -1 and p100 != -1:
-        return ("per_serving", "per_100g") if ps < p100 else ("per_100g", "per_serving")
-    if p100 != -1:
-        return ("per_100g", "per_serving")
-    return ("per_serving", "per_100g")
-
-def parse_nutrition_from_table(table_obj: dict) -> dict:
-    if not table_obj:
-        return {}
-    headers = table_obj.get("headers") or []
-    rows = table_obj.get("rows") or []
-    serving_size = (table_obj.get("serving_size") or "").strip()
-    table_text = table_obj.get("table_text") or ""
-
-    # Default outcome
-    per_serving, per_100g = {}, {}
-
-    if not rows:
-        return {"serving_size": serving_size} if serving_size else {}
-
-    idx_nutr, idx_serv, idx_100 = _detect_column_order_from_headers(headers) if headers else (0, -1, -1)
-    if idx_serv == -1 and idx_100 == -1:
-        # fallback: infer from table text
-        order = _detect_order_from_table_text(table_text)
-        # take first two numeric cells on each row
-        infer_only = True
-    else:
-        order = ("per_serving", "per_100g")
-        infer_only = False
-
-    def put(nkey, v, which):
-        if not v: return
-        if which == "per_serving":
-            per_serving[nkey] = v
-        else:
-            per_100g[nkey] = v
-
-    for r in rows:
-        if not r: continue
-        name = (r[idx_nutr] if idx_nutr < len(r) else r[0]).strip()
-        if not name: continue
-        low = name.lower()
-
-        # choose our canonical key
-        ckey = None
-        for key, pat in NUTRIENT_KEYS:
-            if re.search(pat, low, re.I):
-                ckey = key
-                break
-        if not ckey:
-            continue
-
-        if infer_only:
-            # find up to two numeric values on the row
-            vals = [f"{n} {u}".replace(" ,", ",") for (n, u) in VAL_PATTERN.findall(" ".join(r))]
-            if len(vals) >= 1:
-                which1, which2 = order
-                put(ckey, vals[0], which1)
-                if len(vals) >= 2:
-                    put(ckey, vals[1], which2)
-        else:
-            v_serv = r[idx_serv].strip() if 0 <= idx_serv < len(r) else ""
-            v_100 = r[idx_100].strip() if 0 <= idx_100 < len(r) else ""
-            put(ckey, v_serv, "per_serving")
-            put(ckey, v_100, "per_100g")
-
-    out = {}
-    if serving_size: out["serving_size"] = serving_size
-    if per_serving:  out["per_serving"] = per_serving
-    if per_100g:    out["per_100g"] = per_100g
-    return out
-
 def parse_nutrition_from_text(text: str) -> dict:
-    # fallback text parser
     sect = _slice_section(text, NUT_HEADING_PATTERN)
-    if not sect:
-        return {}
+    if not sect: return {}
     m_ss = re.search(r"serving\s*size\s*[:\-]?\s*([^\n]+)", sect, flags=re.I)
     serving_size = m_ss.group(1).strip() if m_ss else ""
     lines = [ln.strip() for ln in sect.splitlines() if ln.strip()]
-    # simple heuristic: collect first 2 values per line
     def collect_vals(ln):
         return [f"{n} {u}".replace(" ,", ",") for (n, u) in VAL_PATTERN.findall(ln)]
     per_serving, per_100g = {}, {}
@@ -647,11 +590,57 @@ def parse_nutrition_from_text(text: str) -> dict:
     if per_100g:    out["per_100g"] = per_100g
     return out
 
+def _scroll_page_fully(driver, step=900, pause=0.25, max_loops=40):
+    """Scroll down to trigger lazy-loaded content."""
+    last = 0
+    loops = 0
+    while loops < max_loops:
+        driver.execute_script(f"window.scrollBy(0,{step});")
+        time.sleep(pause)
+        now = driver.execute_script("return Math.round(window.scrollY)")
+        height = driver.execute_script("return document.body.scrollHeight")
+        if now == last or now + 5 >= height:
+            break
+        last = now
+        loops += 1
+    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    time.sleep(0.35)
+
+def _expand_nutrition_sections(driver):
+    """Click anything that looks like a Nutrition accordion/tab, then wait a tick."""
+    js = r"""
+    (function(){
+      const rx = /(nutrition\s*information|nutritional|nutrition)\b/i;
+      const els = Array.from(document.querySelectorAll(
+        'button, a, summary, [role="button"], [role="tab"], [aria-controls], [onclick]'
+      ));
+      let clicked = 0;
+      for (const el of els) {
+        const t = (el.innerText || el.textContent || '').trim();
+        if (!t) continue;
+        if (rx.test(t)) {
+          try { el.click(); clicked++; } catch(e){}
+        }
+      }
+      for (const det of Array.from(document.querySelectorAll('details'))) {
+        const sum = det.querySelector('summary');
+        if (!sum) continue;
+        const t = (sum.innerText || sum.textContent || '').trim();
+        if (t && rx.test(t)) { try { det.open = true; clicked++; } catch(e){} }
+      }
+      return clicked;
+    })();
+    """
+    try:
+        return driver.execute_script(js) or 0
+    except Exception:
+        return 0
+
 def fetch_details_for_link(driver, url: str) -> dict:
     """
     Open product page in a new tab, reveal Nutrition info by scrolling & expanding,
-    then parse Ingredients + Nutrition from the page's *visible text*.
-    Falls back to JSON-LD and (least preferred) table-walkers.
+    then parse Ingredients + Nutrition from the page's visible text.
+    Falls back to JSON-LD and (least preferred) table-walker.
     """
     if not url:
         return {"ingredients": "", "nutrition": {}}
@@ -669,32 +658,24 @@ def fetch_details_for_link(driver, url: str) -> dict:
         except TimeoutException:
             pass
 
-        # 1) Trigger lazy content
         _scroll_page_fully(driver)
-
-        # 2) Try to open any Nutrition accordions/tabs
         for _ in range(max(1, NUT_RETRIES)):
             _expand_nutrition_sections(driver)
             time.sleep(0.35)
 
-        # 3) Snapshot visible text
         text_block = safe_js(driver, "return document.body.innerText || document.body.textContent || ''", default="") or ""
-        # If we still don't see any nutrition hints, scroll again and try once more
-        if "nutrition" not in text_block.lower():
+        if "nutrition" not in (text_block.lower()):
             _scroll_page_fully(driver)
             _expand_nutrition_sections(driver)
             time.sleep(0.35)
             text_block = safe_js(driver, "return document.body.innerText || document.body.textContent || ''", default="") or ""
 
-        # 4) Parse ingredients from the visible text
         ingredients = parse_ingredients_from_text(text_block) if FETCH_INGREDIENTS else ""
 
-        # 5) Parse nutrition from the visible text first (most reliable here)
         nutrition = {}
         if FETCH_NUTRITION:
             nutrition = parse_nutrition_from_text(text_block)
 
-            # 6) If still empty: try JSON-LD blobs that sometimes carry nutrition info
             if not nutrition:
                 ld_jsons = safe_js(driver, """
                 const out = [];
@@ -709,7 +690,6 @@ def fetch_details_for_link(driver, url: str) -> dict:
                         data = json.loads(blob)
                     except Exception:
                         continue
-                    # Look for { nutrition: {...} } or nutritionInformation
                     def hunt(x):
                         if isinstance(x, dict):
                             if 'nutrition' in x: return x['nutrition']
@@ -724,11 +704,9 @@ def fetch_details_for_link(driver, url: str) -> dict:
                         return None
                     nut = hunt(data)
                     if isinstance(nut, dict) and nut:
-                        # Keep raw structure as a JSON string
                         nutrition = {"raw": nut}
                         break
 
-            # 7) As a last resort, try the (open-shadow) table walker
             if not nutrition:
                 table_obj = safe_js(driver, _extract_nutrition_table_js(), default=None)
                 if table_obj:
@@ -744,9 +722,8 @@ def fetch_details_for_link(driver, url: str) -> dict:
         try: driver.switch_to.window(orig)
         except Exception: pass
 
-
 # ======================
-# Signal handling
+# SIGNAL HANDLING
 # ======================
 
 def graceful_exit(signum, frame):
@@ -760,10 +737,8 @@ def graceful_exit(signum, frame):
 
 signal.signal(signal.SIGINT, graceful_exit)
 
-
-
 # ======================
-# Main workflow
+# MAIN
 # ======================
 
 def main():
@@ -772,8 +747,14 @@ def main():
     else:
         print("Resume data not found, starting anew...")
 
-    print(f"Saving to {CSV_PATH}")
-    save_header_if_new(CSV_PATH)
+    # Ensure output directory is writable
+    if not ensure_dir_writable(SAVE_DIR):
+        raise PermissionError(f"SaveLocation '{SAVE_DIR}' is not writable. "
+                              f"Update [Global].SaveLocation in configuration.ini to a user-writable path.")
+
+    # Open CSV with retry/fallback (handles Excel/OneDrive locks)
+    f, writer, active_csv_path = open_csv_writer_with_retry(CSV_PATH, CSV_HEADER)
+    print(f"Saving to: {active_csv_path}")
 
     # Gather categories with a short-lived driver
     with edge_driver() as d0:
@@ -782,6 +763,8 @@ def main():
 
     if not cats_all:
         print("No categories found. Exiting.")
+        try: f.close()
+        except Exception: pass
         return
 
     categories = filter_for_resume(cats_all)
@@ -793,79 +776,33 @@ def main():
     pages_since_restart = 0
     DO_FETCH_DETAILS = (FETCH_INGREDIENTS or FETCH_NUTRITION)
 
-    with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
+    drv_ctx = edge_driver()
+    driver = drv_ctx.__enter__()
+    try:
+        for cat in categories:
+            cat_name = cat["name"]
+            cat_href = cat["href"]
 
-        drv_ctx = edge_driver()
-        driver = drv_ctx.__enter__()
-        try:
-            for cat in categories:
-                cat_name = cat["name"]
-                cat_href = cat["href"]
+            persist_resume(cat_name, RESUME_PAGE if (RESUME_ACTIVE and cat_name == RESUME_CATEGORY) else 1, True)
 
-                persist_resume(cat_name, RESUME_PAGE if (RESUME_ACTIVE and cat_name == RESUME_CATEGORY) else 1, True)
+            open_category_page(driver, cat_href, 1)
+            total_pages = get_total_pages(driver)
+            first_page = RESUME_PAGE if (RESUME_ACTIVE and cat_name == RESUME_CATEGORY) else 1
 
-                open_category_page(driver, cat_href, 1)
-                total_pages = get_total_pages(driver)
-                first_page = RESUME_PAGE if (RESUME_ACTIVE and cat_name == RESUME_CATEGORY) else 1
+            for page in range(first_page, total_pages + 1):
+                persist_resume(cat_name, page, True)
+                open_category_page(driver, cat_href, page)
 
-                for page in range(first_page, total_pages + 1):
-                    persist_resume(cat_name, page, True)
-                    open_category_page(driver, cat_href, page)
+                tries, product_count = 0, count_tiles(driver)
+                while product_count == 0 and tries < 2:
+                    print("Grid empty; retrying after a longer wait...")
+                    time.sleep(DELAY_BASE + 1.5)
+                    product_count = count_tiles(driver)
+                    tries += 1
 
-                    tries, product_count = 0, count_tiles(driver)
-                    while product_count == 0 and tries < 2:
-                        print("Grid empty; retrying after a longer wait...")
-                        time.sleep(DELAY_BASE + 1.5)
-                        product_count = count_tiles(driver)
-                        tries += 1
+                print(f"{cat_name}: Page {page} of {total_pages} | Products on this page: {product_count}")
 
-                    print(f"{cat_name}: Page {page} of {total_pages} | Products on this page: {product_count}")
-
-                    if product_count == 0:
-                        pages_since_restart += 1
-                        if pages_since_restart % RESTART_EVERY_PAGES == 0:
-                            print("Restarting browser for hygiene...")
-                            try: driver.quit()
-                            except Exception: pass
-                            drv_ctx.__exit__(None, None, None)
-                            drv_ctx = edge_driver()
-                            driver = drv_ctx.__enter__()
-                        continue
-
-                    for idx in range(product_count):
-                        data = get_tile_texts(driver, idx)
-                        name = data["name"]; itemprice = data["price"]; unitprice = data["unitprice"]
-                        specialtext = data["special"]; promotext = data["promo"]
-                        price_was_struckout = data["was"]; productLink = data["link"]; productcode = data["code"]
-
-                        if not (name and itemprice and productLink and productcode):
-                            continue
-
-                        best_price, best_unitprice, price_was_from_promo = normalize_best_price(itemprice, unitprice, promotext)
-                        price_was = (price_was_struckout or "").strip() or price_was_from_promo
-
-                        ingredients = ""
-                        nutrition_json = ""
-                        if DO_FETCH_DETAILS:
-                            try:
-                                details = fetch_details_for_link(driver, productLink)
-                                if FETCH_INGREDIENTS:
-                                    ingredients = details.get("ingredients", "")
-                                if FETCH_NUTRITION:
-                                    nd = details.get("nutrition", {})
-                                    nutrition_json = json.dumps(nd, ensure_ascii=False) if nd else ""
-                            except Exception:
-                                pass
-
-                        writer.writerow([
-                            productcode, cat_name, name,
-                            best_price, best_unitprice,
-                            itemprice, unitprice,
-                            price_was, specialtext, promotext, productLink,
-                            ingredients, nutrition_json
-                        ])
-
+                if product_count == 0:
                     pages_since_restart += 1
                     if pages_since_restart % RESTART_EVERY_PAGES == 0:
                         print("Restarting browser for hygiene...")
@@ -874,13 +811,58 @@ def main():
                         drv_ctx.__exit__(None, None, None)
                         drv_ctx = edge_driver()
                         driver = drv_ctx.__enter__()
+                    continue
 
-                nap()
+                for idx in range(product_count):
+                    data = get_tile_texts(driver, idx)
+                    name = data["name"]; itemprice = data["price"]; unitprice = data["unitprice"]
+                    specialtext = data["special"]; promotext = data["promo"]
+                    price_was_struckout = data["was"]; productLink = data["link"]; productcode = data["code"]
 
-        finally:
-            try: driver.quit()
-            except Exception: pass
-            drv_ctx.__exit__(None, None, None)
+                    if not (name and itemprice and productLink and productcode):
+                        continue
+
+                    best_price, best_unitprice, price_was_from_promo = normalize_best_price(itemprice, unitprice, promotext)
+                    price_was = (price_was_struckout or "").strip() or price_was_from_promo
+
+                    ingredients = ""
+                    nutrition_json = ""
+                    if DO_FETCH_DETAILS:
+                        try:
+                            details = fetch_details_for_link(driver, productLink)
+                            if FETCH_INGREDIENTS:
+                                ingredients = details.get("ingredients", "")
+                            if FETCH_NUTRITION:
+                                nd = details.get("nutrition", {})
+                                nutrition_json = json.dumps(nd, ensure_ascii=False) if nd else ""
+                        except Exception:
+                            pass
+
+                    writer.writerow([
+                        productcode, cat_name, name,
+                        best_price, best_unitprice,
+                        itemprice, unitprice,
+                        price_was, specialtext, promotext, productLink,
+                        ingredients, nutrition_json
+                    ])
+
+                pages_since_restart += 1
+                if pages_since_restart % RESTART_EVERY_PAGES == 0:
+                    print("Restarting browser for hygiene...")
+                    try: driver.quit()
+                    except Exception: pass
+                    drv_ctx.__exit__(None, None, None)
+                    drv_ctx = edge_driver()
+                    driver = drv_ctx.__enter__()
+
+            nap()
+
+    finally:
+        try: driver.quit()
+        except Exception: pass
+        drv_ctx.__exit__(None, None, None)
+        try: f.close()
+        except Exception: pass
 
     CFG.set('Woolworths', 'Resume_Active', "FALSE")
     CFG.set('Woolworths', 'Resume_Category', "null")

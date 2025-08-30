@@ -2,8 +2,8 @@
 
 from flask import Flask, render_template, request, redirect, url_for
 from flask_login import LoginManager, login_required, UserMixin
-from lib.OpenAIInterface import callOpenAI
-
+from lib.OpenAIInterface import  Top3Product, ProductSummary
+from lib.SQLHandler import db_count_matches, query_top_products
 app = Flask(__name__)
 
 # Setup login 
@@ -53,8 +53,36 @@ def submit_text():
 
     saved_text = f"supplier: Woolworths, item_name:{user_item}, sort_by:{user_category}"
     
-    output_text = callOpenAI(saved_text)
+    global saved_text
+    # get the value from the form (the "name" of the input box)
+    user_item = request.form.get("user_item")
+    user_category = request.form.get("user_category")
+    user_supplier = request.form.get("user_supplier")
+    user_args = request.form.get("user_args")
 
+    saved_text = f"supplier: {user_supplier}, item_name:{user_item}, sort_by:{user_category}"
+    
+
+    #if statement: query db and look up summary : default
+    match_count = db_count_matches(user_item, user_category, user_supplier)
+
+    if match_count > 3:
+        # get top 3 rows
+        rows = query_top_products(user_item, user_category, user_supplier, topn=3)
+        # make summaries with API call
+        lines = []
+        for i, r in enumerate(rows, 1):
+            summary = ProductSummary(r)  #API call from helper method
+            price = r.get("price_per_unit_aud")
+            price_str = f"${price:.2f}" if isinstance(price, (int, float)) else "—"
+            lines.append(
+                f"{i}. {r.get('description') or '(no name)'} | {r.get('brand_owner') or ''} | "
+                f"{price_str} per unit | H{r.get('rating_healthiness') or '–'}/10 "
+                f"S{r.get('rating_sustainability') or '–'}/10 | {summary}"
+            )
+        output_text = "\n".join(lines) if lines else "No local matches."
+    else:
+        output_text = Top3Product(saved_text)
 
     return render_template("index.html", saved_text=saved_text, output_text=output_text)
 
