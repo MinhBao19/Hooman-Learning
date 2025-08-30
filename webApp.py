@@ -20,7 +20,7 @@ def submit_text():
     user_category = request.form.get("user_category")
     user_args = request.form.get("user_args")
 
-    saved_text = f"{user_item}, {user_category}, {user_args}"
+    saved_text = f"supplier: Woolworths, item_name:{user_item}, sort_by:{user_category}"
     
     output_text = callOpenAI(saved_text)
 
