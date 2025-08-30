@@ -24,9 +24,10 @@ users = {}
 
 saved_text = ""
 
+# Not actual password protection
 @login_manager.user_loader
 def user_loader(user_id):
-    return users[user_id]
+    return "user"
 
 # Login page
 @app.route("/", methods=["GET", "POST"])
@@ -74,16 +75,9 @@ def user():
 
 @app.route("/submit", methods=["POST"])
 def submit_text():
-    
-    global saved_text
-    # get the value from the form (the "name" of the input box)
-    user_item = request.form.get("user_item")
-    user_category = request.form.get("user_category")
-    user_args = request.form.get("user_args")
 
-    saved_text = f"supplier: Woolworths, item_name:{user_item}, sort_by:{user_category}"
-    
     global saved_text
+
     # get the value from the form (the "name" of the input box)
     user_item = request.form.get("user_item")
     user_category = request.form.get("user_category")
