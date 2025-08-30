@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+        <meta name="description" content="" />
+        <meta name="author" content="" />
+        <title>S-Mart Get</title>
+        <!-- Favicon-->
+        <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='assets/appleLogo_worm.png') }}" />
+        <!-- Core theme CSS (includes Bootstrap)-->
+        <link href="{{ url_for('static', filename='css/styles.css') }}" rel="stylesheet" />
+    </head>
+    
+
+<body>
+
+    <div class="container">
+            <div class="text-center mt-5">
+                <h1>S-Mart Get</h1>
+                <p class="lead">The smartest way to browse the market!</p>
+                <img 
+                src="{{ url_for('static', filename='assets/appleLogo_worm.png') }}" 
+                style="width:128px; height:128px;align-items: center;"/>
+            </div>
+    </div>
+
+    <h2>Login</h2>
+    {% if message %}
+        <p style="color: red;">{{ message }}</p>
+    {% endif %}
+    <form action="{{ url_for('login') }}" method="post">
+        <label for="username">Username:</label><br>
+        <input type="text" id="username" name="username"><br><br>
+        <label for="password">Password:</label><br>
+        <input type="password" id="password" name="password"><br><br>
+        <input type="submit" value="Login">
+    </form>
+</body>
+</html>
