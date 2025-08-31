@@ -29,13 +29,60 @@
         <!-- Page content-->
         <div class="container">
             <div class="text-center mt-5">
-                <h1>S-Mart Get</h1>
-                <p class="lead">The smartest way to browse the market!</p>
                 <img 
                 src="{{ url_for('static', filename='assets/appleLogo_worm.png') }}" 
                 style="width:128px; height:128px;align-items: center;"/>
             </div>
 
+            <div class="text-center">
+                <h2>Preferences</h2>
+                <p>Your most common categories are:</p>
+                <div class="card shadow-sm h-100">
+                            <div class="card-body text-center">
+                                <p>1. Health</p>
+                            </div>
+                </div>
+
+                <div class="card shadow-sm h-100">
+                            <div class="card-body text-center">
+                                <p>2. Sustainability</p>
+                            </div>
+                </div>
+
+                <div class="card shadow-sm h-100">
+                            <div class="card-body text-center">
+                                <p>3. Local</p>
+                            </div>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="text-center">
+                <h2>Recent Searches</h2>
+                <p>Your most recent searches:</p>
+                <div class="card shadow-sm h-100">
+                    <div class="card-body text-center">
+                        <h5 class="card-title fw-bold">🏆 Royal Gala Apples</h5>
+                        <h2 class="text-success fw-bold">$3.50</h2>
+                        <p class="text-muted small">per unit: NA</p>
+                        <p><strong>Health:</strong> 8/10</p>
+                        <p><strong>Sustainability:</strong> 8/10</p>
+                        <p class="small text-muted">Royal Gala Apples are the most cost-effective option at Woolworths with a good balance of sustainability and health benefits, making them an excellent choice for budget-conscious customers.</p>
+                    </div>
+                </div>
+
+                <div class="card shadow-sm h-100">
+                    <div class="card-body text-center">
+                        <h5 class="card-title fw-bold">🏆 Chunky Tuna</h5>
+                        <h2 class="text-success fw-bold">$2.50</h2>
+                        <p class="text-muted small">per unit: $1.60</p>
+                        <p><strong>Health:</strong> 9/10</p>
+                        <p><strong>Sustainability:</strong> 7/10</p>
+                        <p class="small text-muted">This product is made from sustainably sourced tuna and packaged in recyclable materials, reflecting Woolworths' commitment to environmental responsibility</p>
+                    </div>
+                </div>
+            </div>
 
         </div>
     </body>
