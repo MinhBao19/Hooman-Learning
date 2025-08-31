@@ -81,7 +81,8 @@ def submit_text():
     # get the value from the form (the "name" of the input box)
     user_item = request.form.get("user_item")
     user_category = request.form.get("user_category")
-    user_supplier = request.form.get("user_supplier")
+    # user_supplier = request.form.get("user_supplier")
+    user_supplier = "Woolworths"
     user_args = request.form.get("user_args")
 
     saved_text = f"supplier: {user_supplier}, item_name:{user_item}, sort_by:{user_category}"
