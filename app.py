@@ -88,11 +88,12 @@ def submit_text():
     
 
     #if statement: query db and look up summary : default
-    match_count = db_count_matches(user_item, user_category, user_supplier)
-
+    match_count = db_count_matches(user_item, user_supplier)
+    print(match_count)
     if match_count > 3:
+        print("DB mode")
         # get top 3 rows
-        rows = query_top_products(user_item, user_category, user_supplier, topn=3)
+        rows = query_top_products(user_item, user_supplier, topn=3)
         # make summaries with API call
         lines = []
         for i, r in enumerate(rows, 1):
@@ -106,6 +107,7 @@ def submit_text():
             )
         output_text = "\n".join(lines) if lines else "No local matches."
     else:
+        print("Normal mode")
         output_text = Top3Product(saved_text)
 
     return render_template("index.html", saved_text=saved_text, output_text=output_text)

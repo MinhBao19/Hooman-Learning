@@ -48,7 +48,6 @@ def _tables_exist(con: sqlite3.Connection) -> bool:
 
 def db_count_matches(
     item: Optional[str],
-    category: Optional[str],
     supplier: Optional[str],
 ) -> int:
     """
@@ -61,7 +60,7 @@ def db_count_matches(
     try:
         if not _tables_exist(con):
             return 0
-        item, category, supplier = _like_val(item), _like_val(category), _like_val(supplier)
+        item, supplier = _like_val(item), _like_val(supplier)
         sql = """
         SELECT COUNT(*)
           FROM fdc_products p
@@ -74,7 +73,7 @@ def db_count_matches(
                 p.brand_owner  LIKE '%' || ? || '%' COLLATE NOCASE
            )
         """
-        params = [category, category, supplier, supplier, item, item, item]
+        params = [supplier, supplier, item, item, item]
         (count,) = con.execute(sql, params).fetchone()
         return int(count or 0)
     except sqlite3.Error:
@@ -84,7 +83,6 @@ def db_count_matches(
 
 def query_top_products(
     item: Optional[str],
-    category: Optional[str],
     supplier: Optional[str],
     topn: int = 3,
 ) -> List[Dict[str, Any]]:
@@ -101,7 +99,7 @@ def query_top_products(
         if not _tables_exist(con):
             return []
 
-        item, category, supplier = _like_val(item), _like_val(category), _like_val(supplier)
+        item, supplier = _like_val(item), _like_val(supplier)
 
         sql = """
         SELECT
@@ -128,7 +126,7 @@ def query_top_products(
                  p.price_per_unit_aud ASC
         LIMIT ?
         """
-        params = [category, category, supplier, supplier, item, item, item, int(topn)]
+        params = [ supplier, supplier, item, item, item, int(topn)]
         cur = con.cursor()
         rows = cur.execute(sql, params).fetchall()
         return _rows_to_dicts(cur, rows)
